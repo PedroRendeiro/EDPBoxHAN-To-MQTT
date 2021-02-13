@@ -1,4 +1,9 @@
 #include <ESP8266WiFi.h>                  // WiFi
+//#include <ESP8266HTTPClient.h>
+//#include <CertStoreBearSSL.h>
+//#include <time.h>
+//#include <FS.h>
+//#include <LittleFS.h>
 #include <ArduinoOTA.h>                   // For OTA Programming
 #include <PubSubClient.h>                 // MQTT
 #include <SensorModbusMaster.h>           // MODBUS
@@ -38,6 +43,7 @@ struct EDPBOX {
   unsigned long LAST_INSTANTANEOUS_COMMUNICATION = 0;
   uint8_t LOAD_PROFILE_ENTRIES_COUNTER = 0;
   uint8_t LOCAL_LOAD_PROFILE_ENTRIES_COUNTER = 0;
+  bool Active = true;
 
   EDPBOX(uint8_t EDPBOX_Address, Phases EDPBOX_Phases, Tariffs EDPBOX_Tariffs, bool EDPBOX_EnergyExport, String EDPBOX_ThingId) {
     Address = EDPBOX_Address;
@@ -56,36 +62,27 @@ struct EDPBOX {
   }
 };
 
-// OTA
-#define OTA_HOSTNAME                      "EDPBoxHAN-To-MQTT-2"
-#define OTA_PASSWORD                      CONFIG_OTA_PASSWORD
-
 // WiFi
 const char* ssid =                        CONFIG_WIFI_SSID;
 const char* password =                    CONFIG_WIFI_PASSWORD;
 
-// MQTT
-#define MQTT_SERVER                       CONFIG_MQTT_SERVER
-#define MQTT_SERVERPORT                   CONFIG_MQTT_SERVERPORT
-#define MQTT_USERNAME                     CONFIG_MQTT_USER
-#define MQTT_KEY                          CONFIG_MQTT_PASSWORD
-#define MQTT_MYNAME                       OTA_HOSTNAME"_Client"
-
 // Modbus
 #define MAX485_ENABLE                     0
-const int numEDPBoxes =                   1;
+const int numEDPBoxes =                   2;
 
 ////////////////////////////////
 // Complex Variables
 ////////////////////////////////
-WiFiClient client;                        // TCP Client
-PubSubClient mqttClient(client);          // MQTT
+WiFiClient TCPclient;      // TCP Client
+//BearSSL::CertStore certStore;             // CA Certs
+PubSubClient mqttClient(TCPclient);       // MQTT
 modbusMaster modbus;                      // MODBUS
 modbusMaster modbus2;                     // MODBUS
 
-//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, CONFIG_THING_ID_RC), 
-//                                EDPBOX(0x02, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_1A)};
-EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_LOJA)};
+EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, CONFIG_THING_ID_RC), 
+                                EDPBOX(0x02, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_1A)};
+//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_LOJA)};
+//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, SIX_TARIFF, true, CONFIG_THING_ID_TEST)};
 
 ////////////////////////////////
 // Util functions
@@ -130,13 +127,15 @@ String int2weekday(int weekdayInt) {
 }
 
 void setClock() {
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  configTime(0 * 3600, 1 * 3600, "pt.pool.ntp.org", "pool.ntp.org");
 
   time_t now = time(nullptr);
   while (now < 8 * 3600 * 2) {
     delay(500);
     now = time(nullptr);
   }
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
 }
 
 ////////////////////////////////
@@ -151,7 +150,7 @@ void setClock() {
 ////////////////////////////////
 // Variables
 ////////////////////////////////
-char buf[32];
+char buf[32], hostname[32];
 
 ////////////////////////////////
 // Setup
@@ -160,6 +159,8 @@ void setup() {
   // Init BuiltIn LED
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
+  
+  //LittleFS.begin();
 
   setupSerial();
 
@@ -214,7 +215,9 @@ void setupModbus() {
 
 void loopModbus() {
   for (int edpbox = 0; edpbox < numEDPBoxes; edpbox++) {
-    EDPBOXES[edpbox] = getMeasures(EDPBOXES[edpbox]);
+    if (EDPBOXES[edpbox].Active) {
+      EDPBOXES[edpbox] = getMeasures(EDPBOXES[edpbox]); 
+    }
   }
 }
 
@@ -224,6 +227,25 @@ void loopModbus() {
 void setupWiFi() {
   // Initialize wifi
   WiFi.mode(WIFI_STA);
+
+  String hostnameString = "EDPBoxHAN-" + String(ESP.getChipId());
+  hostnameString.toCharArray(hostname, 32);
+
+  // Set your Static IP address
+  IPAddress local_IP(192, 168, 1, 5);
+  // Set your Gateway IP address
+  IPAddress gateway(192, 168, 1, 254);
+  
+  IPAddress subnet(255, 255, 255, 0);
+  IPAddress primaryDNS(192, 168, 1, 254);
+  IPAddress secondaryDNS(8, 8, 8, 8);
+
+  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+    ESP.restart();
+  }
+ 
+  WiFi.hostname(hostname);
+  
   WiFi.begin(ssid, password);
 
   const int kRetryCountWiFi = 20;
@@ -234,13 +256,41 @@ void setupWiFi() {
       ESP.restart();
     }
   }
+
+  /*setClock(); // Required for X.509 validation
+
+  int numCerts = certStore.initCertStore(LittleFS, PSTR("/certs.idx"), PSTR("/certs.ar"));
+
+  if (numCerts == 0) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+
+    String url = "https://home.pedrorendeiro.eu/certs.ar";
+    File f = LittleFS.open("certs.ar", "w");
+    if (f) {
+      http.begin(client, url);
+      int httpCode = http.GET();
+      if (httpCode > 0) {
+        if (httpCode == HTTP_CODE_OK) {
+          http.writeToStream(&f);
+        }
+      }
+      f.close();
+    }
+    http.end();
+
+    numCerts = certStore.initCertStore(LittleFS, PSTR("/certs.idx"), PSTR("/certs.ar"));
+  }
+
+  TCPclient.setCertStore(&certStore);*/
 }
 
 ////////////////////////////////
 // MQTT
 ////////////////////////////////
 void setupMQTT() {
-  mqttClient.setServer(MQTT_SERVER, MQTT_SERVERPORT);
+  mqttClient.setServer(CONFIG_MQTT_SERVER, CONFIG_MQTT_SERVERPORT);
   mqttClient.setCallback(MQTTOnMessage);
 
   mqttClient.setBufferSize(2048);
@@ -261,7 +311,7 @@ void reconnectMQTT() {
   // Loop until we're reconnected
   while (!mqttClient.connected()) {    
     // Attempt to connect
-    if (mqttClient.connect(MQTT_MYNAME, MQTT_USERNAME, MQTT_KEY)) {
+    if (mqttClient.connect(hostname, CONFIG_MQTT_USERNAME, CONFIG_MQTT_PASSWORD)) {
 
       char commandTopicChar[64], debugTopicChar[64];
       String commandTopicString, debugTopicString;
@@ -270,7 +320,7 @@ void reconnectMQTT() {
         commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/+";
         commandTopicString.toCharArray(commandTopicChar, 64);
         debugTopicString = "debug/" + EDPBOXES[edpbox].ThingId;
-        debugTopicString.toCharArray(debugTopicChar, 64);
+        debugTopicString.toCharArray(debugTopicChar, 64); 
         
         mqttClient.subscribe(commandTopicChar);
 
@@ -295,14 +345,30 @@ void MQTTOnMessage(char* topic, byte* payload, unsigned int length) {
   String commandTopicString, debugTopicString;
 
   for (int edpbox = 0; edpbox < numEDPBoxes; edpbox++) {
-    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/restart";
-    commandTopicString.toCharArray(commandTopicChar, 64);
     debugTopicString = "debug/" + EDPBOXES[edpbox].ThingId;
     debugTopicString.toCharArray(debugTopicChar, 64);
-    
+
+    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/restart";
+    commandTopicString.toCharArray(commandTopicChar, 64);
     if (str2int(topic) == str2int(commandTopicChar)) {
       mqttClient.publish(debugTopicChar, "Restarting PowerMeterHAN!");
       ESP.restart();
+    }
+
+    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/start";
+    commandTopicString.toCharArray(commandTopicChar, 64);
+    if (str2int(topic) == str2int(commandTopicChar)) {
+      mqttClient.publish(debugTopicChar, "Starting PowerMeterHAN!");
+      EDPBOXES[edpbox].Active = true;
+      return;
+    }
+
+    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/stop";
+    commandTopicString.toCharArray(commandTopicChar, 64);
+    if (str2int(topic) == str2int(commandTopicChar)) {
+      mqttClient.publish(debugTopicChar, "Stoping PowerMeterHAN!");
+      EDPBOXES[edpbox].Active = false;
+      return;
     }
   }
 
@@ -349,10 +415,10 @@ void sendBufferMQTT(char buf[], int len) {
 ////////////////////////////////
 void setupOTA() {
   // Set OTA Hostname
-  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setHostname(hostname);
 
   // Set OTA Password
-  ArduinoOTA.setPassword((const char *)OTA_PASSWORD);
+  ArduinoOTA.setPassword((const char *)CONFIG_OTA_PASSWORD);
 
   // Init OTA
   ArduinoOTA.begin();
@@ -595,19 +661,19 @@ EDPBOX getMeasures(EDPBOX edpbox) {
           continue;
         }
         
-        snprintf(key, 16, "P_%c_MAX_%s", keys4[j], keys3[i]);
+        snprintf(key, 16, "P_%s_MAX_%c", keys3[i], keys4[j]);
         
         doc[key]["P"] = modbus.uint32FromFrame(bigEndian, registers += 1);
-        doc[key]["Year"] = modbus.uint16FromFrame(bigEndian, registers += 4);
-        doc[key]["Month"] = modbus.byteFromFrame(registers += 2);
-        doc[key]["Day"] = modbus.byteFromFrame(registers += 1);
-        doc[key]["Weekday"] = int2weekday(modbus.byteFromFrame(registers += 1));
-        doc[key]["Hour"] = modbus.byteFromFrame(registers += 1);
-        doc[key]["Minute"] = modbus.byteFromFrame(registers += 1);
-        doc[key]["Second"] = modbus.byteFromFrame(registers += 1);
-        doc[key]["Millisecond"] = modbus.byteFromFrame(registers += 1);
-        doc[key]["TimeZone"] = modbus.int16FromFrame(bigEndian, registers += 1);
-        doc[key]["Season"] = modbus.byteFromFrame(registers += 2) == 0x00 ? "Winter" : (0x80 ? "Summer" : "?");
+        doc[key]["Clock"]["Year"] = modbus.uint16FromFrame(bigEndian, registers += 4);
+        doc[key]["Clock"]["Month"] = modbus.byteFromFrame(registers += 2);
+        doc[key]["Clock"]["Day"] = modbus.byteFromFrame(registers += 1);
+        doc[key]["Clock"]["Weekday"] = int2weekday(modbus.byteFromFrame(registers += 1));
+        doc[key]["Clock"]["Hour"] = modbus.byteFromFrame(registers += 1);
+        doc[key]["Clock"]["Minute"] = modbus.byteFromFrame(registers += 1);
+        doc[key]["Clock"]["Second"] = modbus.byteFromFrame(registers += 1);
+        doc[key]["Clock"]["Millisecond"] = modbus.byteFromFrame(registers += 1);
+        doc[key]["Clock"]["TimeZone"] = modbus.int16FromFrame(bigEndian, registers += 1);
+        doc[key]["Clock"]["Season"] = modbus.byteFromFrame(registers += 2) == 0x00 ? "Winter" : (0x80 ? "Summer" : "?");
       }
       
       if (edpbox.EnergyExport & i == 0) {
