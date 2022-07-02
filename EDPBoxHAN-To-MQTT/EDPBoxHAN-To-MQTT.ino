@@ -45,20 +45,12 @@ struct EDPBOX {
   uint8_t LOCAL_LOAD_PROFILE_ENTRIES_COUNTER = 0;
   bool Active = true;
 
-  EDPBOX(uint8_t EDPBOX_Address, Phases EDPBOX_Phases, Tariffs EDPBOX_Tariffs, bool EDPBOX_EnergyExport, String EDPBOX_ThingId) {
+  EDPBOX(String EDPBOX_ThingId, uint8_t EDPBOX_Address = 0x01, Phases EDPBOX_Phases = ONE_PHASE, bool EDPBOX_EnergyExport = false, Tariffs EDPBOX_Tariffs = THREE_TARIFF) {
+    ThingId = EDPBOX_ThingId;
     Address = EDPBOX_Address;
     NumberPhases = EDPBOX_Phases;
-    NumberTariffs = EDPBOX_Tariffs;
     EnergyExport = EDPBOX_EnergyExport;
-    ThingId = EDPBOX_ThingId;
-  }
-
-  EDPBOX(uint8_t EDPBOX_Address, String EDPBOX_ThingId) {
-    Address = EDPBOX_Address;
-    NumberPhases = ONE_PHASE;
-    NumberTariffs = THREE_TARIFF;
-    EnergyExport = false;
-    ThingId = EDPBOX_ThingId;
+    NumberTariffs = EDPBOX_Tariffs;
   }
 };
 
@@ -68,7 +60,7 @@ const char* password =                    CONFIG_WIFI_PASSWORD;
 
 // Modbus
 #define MAX485_ENABLE                     0
-const int numEDPBoxes =                   1;
+const int numEDPBoxes =                   2;
 
 ////////////////////////////////
 // Complex Variables
@@ -79,9 +71,10 @@ PubSubClient mqttClient(TCPclient);       // MQTT
 modbusMaster modbus;                      // MODBUS
 modbusMaster modbus2;                     // MODBUS
 
-//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, CONFIG_THING_ID_RC), 
-//                                EDPBOX(0x02, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_1A)};
-EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_LOJA)};
+EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(CONFIG_THING_ID_RC, 0x01, ONE_PHASE, true),
+                                EDPBOX(CONFIG_THING_ID_1A, 0x02, THREE_PHASE, true)};
+//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(CONFIG_THING_ID_LOJA, 0x01, THREE_PHASE, false)};
+//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(CONFIG_THING_ID_APT)};
 //EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, SIX_TARIFF, true, CONFIG_THING_ID_TEST)};
 
 ////////////////////////////////
@@ -141,9 +134,9 @@ void setClock() {
 ////////////////////////////////
 // Time variables
 ////////////////////////////////
-#define REPORTING_INFO_PERIOD             600000
-#define REPORTING_TOTAL_PERIOD            600000
-#define REPORTING_TARIFF_PERIOD           600000
+#define REPORTING_INFO_PERIOD             300000
+#define REPORTING_TOTAL_PERIOD            300000
+#define REPORTING_TARIFF_PERIOD           300000
 #define REPORTING_INSTANTANEOUS_PERIOD     10000
 #define WATCHDOG_TIMEOUT_PERIOD         86400000
 
@@ -187,7 +180,7 @@ void loop() {
 ////////////////////////////////
 void setupSerial() {
   // Init MODBUS Serial communication
-  Serial.begin(9600, SERIAL_8N2);
+  Serial.begin(9600, SERIAL_8N1);
 
   // Init DEBUG Serial communication
   //Serial1.begin(74880);
@@ -370,6 +363,38 @@ void MQTTOnMessage(char* topic, byte* payload, unsigned int length) {
       EDPBOXES[edpbox].Active = false;
       return;
     }
+
+    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/info";
+    commandTopicString.toCharArray(commandTopicChar, 64);
+    if (str2int(topic) == str2int(commandTopicChar)) {
+      mqttClient.publish(debugTopicChar, "Reading Tariff from PowerMeterHAN!");
+      EDPBOXES[edpbox].LAST_INFO_COMMUNICATION = millis() - REPORTING_INFO_PERIOD;
+      return;
+    }
+
+    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/total";
+    commandTopicString.toCharArray(commandTopicChar, 64);
+    if (str2int(topic) == str2int(commandTopicChar)) {
+      mqttClient.publish(debugTopicChar, "Reading Tariff from PowerMeterHAN!");
+      EDPBOXES[edpbox].LAST_TOTAL_COMMUNICATION = millis() - REPORTING_TOTAL_PERIOD;
+      return;
+    }
+
+    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/tariff";
+    commandTopicString.toCharArray(commandTopicChar, 64);
+    if (str2int(topic) == str2int(commandTopicChar)) {
+      mqttClient.publish(debugTopicChar, "Reading Tariff from PowerMeterHAN!");
+      EDPBOXES[edpbox].LAST_TARIFF_COMMUNICATION = millis() - REPORTING_TARIFF_PERIOD;
+      return;
+    }
+
+    commandTopicString = "command/" + EDPBOXES[edpbox].ThingId + "/instantaneous";
+    commandTopicString.toCharArray(commandTopicChar, 64);
+    if (str2int(topic) == str2int(commandTopicChar)) {
+      mqttClient.publish(debugTopicChar, "Reading Instantaneous from PowerMeterHAN!");
+      EDPBOXES[edpbox].LAST_INSTANTANEOUS_COMMUNICATION = millis() - REPORTING_INSTANTANEOUS_PERIOD;
+      return;
+    }
   }
 
   String topicString(topic);
@@ -498,9 +523,9 @@ EDPBOX getMeasures(EDPBOX edpbox) {
     // 1 byte missing but appears extra one on the end, don't know why
     if (edpbox.NumberPhases == THREE_PHASE) {
       //registers -= 1;
-      doc["Load Counter"] = 0;
+      doc["LoadCounter"] = 0;
     } else {
-      doc["Load Counter"] = modbus.byteFromFrame(registers += 1);
+      doc["LoadCounter"] = modbus.byteFromFrame(registers += 1);
     }
   
     memset(outChar, 0, 12);
@@ -663,7 +688,7 @@ EDPBOX getMeasures(EDPBOX edpbox) {
         
         snprintf(key, 16, "P_%s_MAX_%c", keys3[i], keys4[j]);
         
-        doc[key]["P"] = modbus.uint32FromFrame(bigEndian, registers += 1);
+        doc[key]["P"] = modbus.uint32FromFrame(bigEndian, registers += 1);;
         doc[key]["Clock"]["Year"] = modbus.uint16FromFrame(bigEndian, registers += 4);
         doc[key]["Clock"]["Month"] = modbus.byteFromFrame(registers += 2);
         doc[key]["Clock"]["Day"] = modbus.byteFromFrame(registers += 1);
@@ -674,6 +699,11 @@ EDPBOX getMeasures(EDPBOX edpbox) {
         doc[key]["Clock"]["Millisecond"] = modbus.byteFromFrame(registers += 1);
         doc[key]["Clock"]["TimeZone"] = modbus.int16FromFrame(bigEndian, registers += 1);
         doc[key]["Clock"]["Season"] = modbus.byteFromFrame(registers += 2) == 0x00 ? "Winter" : (0x80 ? "Summer" : "?");
+
+        if (doc[key]["P"] == 0 || doc[key]["Weekday"] == "") {
+          doc.remove(key);
+          continue;
+        }
       }
       
       if (edpbox.EnergyExport & i == 0) {
@@ -707,13 +737,20 @@ EDPBOX getMeasures(EDPBOX edpbox) {
     switch(edpbox.NumberPhases) {
       case(ONE_PHASE):
         modbus.getRegisters(0x04, 0x6C, 2);
+        sendBufferMQTT(modbus.responseBuffer, 4);
+        if (modbus.byteFromFrame(registers = 2) != 4) {
+          return edpbox;
+        }
         break;
       case(THREE_PHASE):
         modbus.getRegisters(0x04, 0x6C, 20);
+        if (modbus.byteFromFrame(registers = 2) != 56) {
+          return edpbox;
+        }
         break;
     }
 
-    doc["V_L1"] = (float)modbus.uint16FromFrame(bigEndian, registers = 3)/10.0;
+    doc["V_L1"] = (float)modbus.uint16FromFrame(bigEndian, registers += 1)/10.0;
     doc["I_L1"] = (float)modbus.uint16FromFrame(bigEndian, registers += 2)/10.0;
 
     if (edpbox.NumberPhases == THREE_PHASE) {
@@ -742,6 +779,9 @@ EDPBOX getMeasures(EDPBOX edpbox) {
       }
     } else {
       modbus.getRegisters(0x04, 0x79, 3);
+      if (modbus.byteFromFrame(2) != 10) {
+          return edpbox;
+      }    
       registers = -1;
     }
     
@@ -759,7 +799,10 @@ EDPBOX getMeasures(EDPBOX edpbox) {
       doc["PF_L3"] = (float)modbus.uint16FromFrame(bigEndian, registers += 2)/1000.0;
     } else {
       modbus.getRegisters(0x04, 0x7F, 1);
-      registers = 1;
+      if (modbus.byteFromFrame(registers = 2) != 2) {
+          return edpbox;
+      }      
+      registers -= 1;
     }
     
     doc["F"] = (float)modbus.uint16FromFrame(bigEndian, registers += 2)/10.0;
