@@ -68,20 +68,20 @@ const char* password =                    CONFIG_WIFI_PASSWORD;
 
 // Modbus
 #define MAX485_ENABLE                     0
-const int numEDPBoxes =                   2;
+const int numEDPBoxes =                   1;
 
 ////////////////////////////////
 // Complex Variables
 ////////////////////////////////
-WiFiClient TCPclient;      // TCP Client
-//BearSSL::CertStore certStore;             // CA Certs
+WiFiClient TCPclient;                     // TCP Client
+//BearSSL::CertStore certStore;           // CA Certs
 PubSubClient mqttClient(TCPclient);       // MQTT
 modbusMaster modbus;                      // MODBUS
 modbusMaster modbus2;                     // MODBUS
 
-EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, CONFIG_THING_ID_RC), 
-                                EDPBOX(0x02, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_1A)};
-//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_LOJA)};
+//EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, CONFIG_THING_ID_RC), 
+//                                EDPBOX(0x02, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_1A)};
+EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, THREE_TARIFF, false, CONFIG_THING_ID_LOJA)};
 //EDPBOX EDPBOXES[numEDPBoxes] = {EDPBOX(0x01, THREE_PHASE, SIX_TARIFF, true, CONFIG_THING_ID_TEST)};
 
 ////////////////////////////////
@@ -144,7 +144,7 @@ void setClock() {
 #define REPORTING_INFO_PERIOD             600000
 #define REPORTING_TOTAL_PERIOD            600000
 #define REPORTING_TARIFF_PERIOD           600000
-#define REPORTING_INSTANTANEOUS_PERIOD     30000
+#define REPORTING_INSTANTANEOUS_PERIOD     10000
 #define WATCHDOG_TIMEOUT_PERIOD         86400000
 
 ////////////////////////////////
