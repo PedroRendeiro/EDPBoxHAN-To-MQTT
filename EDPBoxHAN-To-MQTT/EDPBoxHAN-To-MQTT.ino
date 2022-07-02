@@ -688,7 +688,7 @@ EDPBOX getMeasures(EDPBOX edpbox) {
         
         snprintf(key, 16, "P_%s_MAX_%c", keys3[i], keys4[j]);
         
-        doc[key]["P"] = modbus.uint32FromFrame(bigEndian, registers += 1);;
+        doc[key]["P"] = modbus.uint32FromFrame(bigEndian, registers += 1);
         doc[key]["Clock"]["Year"] = modbus.uint16FromFrame(bigEndian, registers += 4);
         doc[key]["Clock"]["Month"] = modbus.byteFromFrame(registers += 2);
         doc[key]["Clock"]["Day"] = modbus.byteFromFrame(registers += 1);
